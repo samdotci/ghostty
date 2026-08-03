@@ -549,6 +549,26 @@ class QuickTerminalController: BaseTerminalController {
         }
     }
 
+    enum PreviousAppRestorationDecision {
+        case restorePrevious
+        case preserveCurrent
+    }
+
+    static func previousAppRestorationDecision(
+        frontmostBundleIdentifier: String?,
+        ghosttyBundleIdentifier: String?
+    ) -> PreviousAppRestorationDecision {
+        guard let frontmostBundleIdentifier,
+              let ghosttyBundleIdentifier,
+              frontmostBundleIdentifier == ghosttyBundleIdentifier else {
+            // A missing identity can occur during an activation transition. Avoid
+            // activating a potentially stale application unless Ghostty is confirmed
+            // to be frontmost.
+            return .preserveCurrent
+        }
+        return .restorePrevious
+    }
+
     private func animateWindowOut(window: NSWindow, to position: QuickTerminalPosition) {
         saveScreenState(exitFullscreen: true)
 
@@ -570,17 +590,19 @@ class QuickTerminalController: BaseTerminalController {
         // We always animate out to whatever screen the window is actually on.
         guard let screen = window.screen ?? NSScreen.main else { return }
 
-        // If we have a previously active application, restore focus to it. We
-        // do this BEFORE the animation below because when the animation completes
-        // macOS will bring forward another window.
-        if let previousApp = self.previousApp {
-            // Make sure we unset the state no matter what
-            self.previousApp = nil
-
-            if !previousApp.isTerminated {
-                // Ignore the result, it doesn't change our behavior.
-                _ = previousApp.activate(options: [])
-            }
+        // If Ghostty is still frontmost, restore the application that was active
+        // before the quick terminal appeared. If the user focused another app while
+        // the quick terminal remained visible, leave that app in front.
+        let restorationDecision = Self.previousAppRestorationDecision(
+            frontmostBundleIdentifier: NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
+            ghosttyBundleIdentifier: Bundle.main.bundleIdentifier)
+        let previousApp = self.previousApp
+        self.previousApp = nil
+        if restorationDecision == .restorePrevious,
+           let previousApp,
+           !previousApp.isTerminated {
+            // Ignore the result, it doesn't change our behavior.
+            _ = previousApp.activate(options: [])
         }
 
         // We need to set our window level to a high value. In testing, only
